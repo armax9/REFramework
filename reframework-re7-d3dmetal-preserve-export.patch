@@ -1,0 +1,45 @@
+--- a/src/D3D12Hook.cpp
++++ b/src/D3D12Hook.cpp
+@@ -195,7 +195,23 @@
+     spdlog::info("Creating dummy device");
+ 
+     // Get the original on-disk bytes of the D3D12CreateDevice export
+-    const auto original_bytes = utility::get_original_bytes(d3d12_create_device);
++    char preserve_value[8]{};
++    GetEnvironmentVariableA("REF_D3D12_PRESERVE_EXPORT", preserve_value, sizeof(preserve_value));
++    const bool running_wine = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != nullptr;
++    const bool preserve_export = preserve_value[0] == '1' ||
++        (preserve_value[0] == '\0' && running_wine);
++    spdlog::info("D3D12 compatibility: wine={}, preserve_export={}", running_wine, preserve_export);
++    spdlog::default_logger()->flush();
++    const auto original_bytes = preserve_export ? decltype(utility::get_original_bytes(d3d12_create_device)){} :
++        utility::get_original_bytes(d3d12_create_device);
++    const auto create_dummy_device = [&]() {
++        spdlog::info("D3D12 compatibility: entering D3D12CreateDevice");
++        spdlog::default_logger()->flush();
++        const auto result = d3d12_create_device(nullptr, feature_level, IID_PPV_ARGS(&device));
++        spdlog::info("D3D12 compatibility: HRESULT={:08x}, device={:x}", (uint32_t)result, (uintptr_t)device);
++        spdlog::default_logger()->flush();
++        return result;
++    };
+ 
+     // Temporarily unhook D3D12CreateDevice
+     // it allows compatibility with ReShade and other overlays that hook it
+@@ -209,7 +225,7 @@
+         ProtectionOverride protection_override{ d3d12_create_device, original_bytes->size(), PAGE_EXECUTE_READWRITE };
+         memcpy(d3d12_create_device, original_bytes->data(), original_bytes->size());
+         
+-        if (FAILED(d3d12_create_device(nullptr, feature_level, IID_PPV_ARGS(&device)))) {
++        if (FAILED(create_dummy_device())) {
+             spdlog::error("Failed to create D3D12 Dummy device");
+             memcpy(d3d12_create_device, hooked_bytes.data(), hooked_bytes.size());
+             return false;
+@@ -218,7 +234,7 @@
+         spdlog::info("Restoring hooked bytes for D3D12CreateDevice");
+         memcpy(d3d12_create_device, hooked_bytes.data(), hooked_bytes.size());
+     } else { // D3D12CreateDevice is not hooked
+-        if (FAILED(d3d12_create_device(nullptr, feature_level, IID_PPV_ARGS(&device)))) {
++        if (FAILED(create_dummy_device())) {
+             spdlog::error("Failed to create D3D12 Dummy device");
+             return false;
+         }

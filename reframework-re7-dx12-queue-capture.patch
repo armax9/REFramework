@@ -1,0 +1,195 @@
+--- a/src/D3D12Hook.cpp
++++ b/src/D3D12Hook.cpp
+@@ -1,4 +1,5 @@
+ #include <thread>
++#include <atomic>
+ #include <future>
+ #include <unordered_set>
+ #include <stacktrace>
+@@ -19,6 +20,9 @@
+ #include "D3D12Hook.hpp"
+ 
+ static D3D12Hook* g_d3d12_hook = nullptr;
++using ExecuteCommandListsFn = void (STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
++// Keep the original callable after unhook for callbacks already in flight.
++static std::atomic<ExecuteCommandListsFn> g_original_execute{nullptr};
+ thread_local bool g_inside_d3d12_hook = false;
+ 
+ D3D12Hook::~D3D12Hook() {
+@@ -482,8 +486,14 @@
+     }
+ 
+     if (m_command_queue_offset == 0) {
+-        spdlog::error("Failed to find command queue offset");
+-        return false;
++        spdlog::warn("DX12 queue capture: offset unavailable; capturing ExecuteCommandLists instead");
++        m_using_submission_capture = true;
++        m_queue_wait_logged = false;
++        auto& execute_fn = (*(void***)command_queue)[10];
++        g_original_execute.store(reinterpret_cast<ExecuteCommandListsFn>(execute_fn));
++        m_execute_hook = std::make_unique<PointerHook>(&execute_fn,
++            (void*)&D3D12Hook::execute_command_lists);
++        spdlog::default_logger()->flush();
+     }
+ 
+     hook_streamline();
+@@ -538,6 +548,13 @@
+ 
+     std::scoped_lock _{g_framework->get_hook_monitor_mutex()};
+ 
++    // Also clean up a capture hook if initialization stopped before Present.
++    m_execute_hook.reset();
++    m_submitted_queues.clear();
++    m_captured_queue.Reset();
++    m_command_queue = nullptr;
++    m_using_submission_capture = false;
++    m_queue_wait_logged = false;
+     if (!m_hooked) {
+         return true;
+     }
+@@ -550,6 +567,79 @@
+     m_hooked = false;
+     m_is_phase_1 = true;
+ 
++    return true;
++}
++
++void STDMETHODCALLTYPE D3D12Hook::execute_command_lists(ID3D12CommandQueue* queue,
++    UINT count, ID3D12CommandList* const* lists) {
++    const auto original = g_original_execute.load();
++    original(queue, count, lists);
++    if (g_inside_d3d12_hook || count == 0 || g_framework == nullptr) {
++        return;
++    }
++    // Match Present/unhook locking; never hold this lock during the original submission.
++    std::scoped_lock lock{g_framework->get_hook_monitor_mutex()};
++    auto* hook = g_d3d12_hook;
++    if (hook == nullptr || !hook->m_using_submission_capture ||
++        queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT) {
++        return;
++    }
++    for (auto& entry : hook->m_submitted_queues) {
++        if (entry.queue.Get() == queue) {
++            entry.thread_id = GetCurrentThreadId();
++            return;
++        }
++    }
++    SubmittedQueue entry;
++    entry.queue = queue;
++    entry.thread_id = GetCurrentThreadId();
++    hook->m_submitted_queues.push_back(std::move(entry));
++    hook->m_queue_wait_logged = false;
++    spdlog::info("DX12 queue capture: observed DIRECT queue={:x}, thread={}",
++        (uintptr_t)queue, GetCurrentThreadId());
++}
++
++bool D3D12Hook::select_submitted_queue(ID3D12Device* device) {
++    // D3DMetal may reject IID_IUnknown: compare the same supported base interface.
++    Microsoft::WRL::ComPtr<ID3D12Device> identity;
++    if (FAILED(device->QueryInterface(IID_PPV_ARGS(identity.GetAddressOf())))) {
++        return false;
++    }
++    ID3D12CommandQueue* sole = nullptr;
++    ID3D12CommandQueue* same_thread = nullptr;
++    size_t matches = 0;
++    size_t thread_matches = 0;
++    for (auto& entry : m_submitted_queues) {
++        Microsoft::WRL::ComPtr<ID3D12Device> queue_device;
++        Microsoft::WRL::ComPtr<ID3D12Device> queue_identity;
++        if (FAILED(entry.queue->GetDevice(IID_PPV_ARGS(queue_device.GetAddressOf()))) ||
++            FAILED(queue_device->QueryInterface(IID_PPV_ARGS(queue_identity.GetAddressOf()))) ||
++            queue_identity.Get() != identity.Get()) {
++            continue;
++        }
++        sole = entry.queue.Get();
++        ++matches;
++        if (entry.thread_id == GetCurrentThreadId()) {
++            same_thread = entry.queue.Get();
++            ++thread_matches;
++        }
++    }
++    auto* selected = thread_matches == 1 ? same_thread : (matches == 1 ? sole : nullptr);
++    if (selected == nullptr) {
++        if (!m_queue_wait_logged) {
++            spdlog::warn("DX12 queue capture: observed={}, matching_device={}, matching_thread={}",
++                m_submitted_queues.size(), matches, thread_matches);
++        }
++        return false;
++    }
++    if (m_captured_queue.Get() != selected) {
++        m_captured_queue = selected;
++        spdlog::info("DX12 queue capture: selected queue={:x}, device={:x}, same_thread={}",
++            (uintptr_t)selected, (uintptr_t)device, thread_matches == 1);
++        spdlog::default_logger()->flush();
++    }
++    m_command_queue = m_captured_queue.Get();
++    m_queue_wait_logged = false;
+     return true;
+ }
+ 
+@@ -582,6 +672,22 @@
+ 
+     if (!d3d12->m_is_phase_1 && swap_chain != d3d12->m_swapchain_hook->get_instance()) {
+         return present_fn(swap_chain, sync_interval, flags, r9);
++    }
++
++    if (d3d12->m_using_submission_capture) {
++        Microsoft::WRL::ComPtr<ID3D12Device> device;
++        Microsoft::WRL::ComPtr<ID3D12Device4> device4;
++        const auto result = swap_chain->GetDevice(IID_PPV_ARGS(device.GetAddressOf()));
++        if (FAILED(result) ||
++            FAILED(device->QueryInterface(IID_PPV_ARGS(device4.GetAddressOf()))) ||
++            !d3d12->select_submitted_queue(device.Get())) {
++            if (!d3d12->m_queue_wait_logged) {
++                spdlog::warn("DX12 queue capture: waiting for compatible device and unambiguous DIRECT queue; GetDevice HRESULT={:08x}", (uint32_t)result);
++                spdlog::default_logger()->flush();
++                d3d12->m_queue_wait_logged = true;
++            }
++            return present_fn(swap_chain, sync_interval, flags, r9);
++        }
+     }
+ 
+     if (d3d12->m_is_phase_1) {
+@@ -615,7 +721,9 @@
+         d3d12->m_device = temp_device.Get();
+     }
+ 
+-    if (d3d12->m_using_proton_swapchain) {
++    if (d3d12->m_using_submission_capture) {
++        // The queue is owned by m_captured_queue, selected above.
++    } else if (d3d12->m_using_proton_swapchain) {
+         const auto real_swapchain = *(uintptr_t*)((uintptr_t)swap_chain + d3d12->m_proton_swapchain_offset);
+         d3d12->m_command_queue = *(ID3D12CommandQueue**)(real_swapchain + d3d12->m_command_queue_offset);
+     } else {
+--- a/src/D3D12Hook.hpp
++++ b/src/D3D12Hook.hpp
+@@ -2,6 +2,9 @@
+ 
+ #include <iostream>
+ #include <functional>
++#include <mutex>
++#include <vector>
++#include <wrl/client.h>
+ 
+ #pragma comment(lib, "d3d12.lib")
+ #pragma comment(lib, "dxgi")
+@@ -111,6 +114,19 @@
+     UINT m_render_width{ NULL };
+     UINT m_render_height{ NULL };
+ 
++    struct SubmittedQueue {
++        Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
++        DWORD thread_id{};
++    };
++    std::vector<SubmittedQueue> m_submitted_queues;
++    Microsoft::WRL::ComPtr<ID3D12CommandQueue> m_captured_queue;
++    std::unique_ptr<PointerHook> m_execute_hook;
++    bool m_using_submission_capture{false};
++    bool m_queue_wait_logged{false};
++    static void STDMETHODCALLTYPE execute_command_lists(ID3D12CommandQueue* queue,
++        UINT count, ID3D12CommandList* const* lists);
++    bool select_submitted_queue(ID3D12Device* device);
++
+     uint32_t m_command_queue_offset{};
+     uint32_t m_proton_swapchain_offset{};
+ 

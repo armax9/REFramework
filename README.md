@@ -1,3 +1,9 @@
+# Wine / CrossOver experimental RE7 VR build
+
+See [WINE-CROSSOVER.md](WINE-CROSSOVER.md) for this fork's fixes, installation and limitations. Download the tested DLL from [this fork's releases](https://github.com/armax9/REFramework/releases).
+
+---
+
 # REFramework [![Build status](https://github.com/praydog/reframework/actions/workflows/dev-release.yml/badge.svg)](https://github.com/praydog/REFramework-nightly/releases)
 A mod framework, scripting platform, and modding tool for RE Engine games. Inspired by and uses code from [Kanan](https://github.com/cursey/kanan-new)
 
