@@ -34,7 +34,7 @@ struct InvokeRet {
 
 class API {
 private:
-    static inline std::unique_ptr<API> s_instance{};
+    static std::unique_ptr<API> s_instance;
 
 public:
     struct TDB;
@@ -969,4 +969,6 @@ private:
     const REFrameworkSDKData* m_sdk;
     std::recursive_mutex m_lua_mtx{};
 };
+
+inline std::unique_ptr<API> API::s_instance{};
 }

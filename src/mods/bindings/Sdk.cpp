@@ -229,18 +229,18 @@ int sol_lua_push(sol::types<T*>, lua_State* l, T* obj) {
                     }
 
                     switch (typename_hash) {
-                    case "via.Transform"_fnv:
+                    case static_cast<uint32_t>("via.Transform"_fnv):
                         backpedal = sol::stack::push<sol::detail::as_pointer_tag<std::remove_pointer_t<::RETransform>>>(l, (::RETransform*)obj);
                         break;
-                    case "via.behaviortree.BehaviorTree"_fnv:[[fallthrough]];
-                    case "via.motion.MotionFsm2"_fnv:[[fallthrough]];
-                    case "via.motion.MotionJackFsm2"_fnv:[[fallthrough]];
-                    case "snow.PlayerMotionFsm"_fnv:
+                    case static_cast<uint32_t>("via.behaviortree.BehaviorTree"_fnv):[[fallthrough]];
+                    case static_cast<uint32_t>("via.motion.MotionFsm2"_fnv):[[fallthrough]];
+                    case static_cast<uint32_t>("via.motion.MotionJackFsm2"_fnv):[[fallthrough]];
+                    case static_cast<uint32_t>("snow.PlayerMotionFsm"_fnv):
                         backpedal = sol::stack::push<sol::detail::as_pointer_tag<std::remove_pointer_t<api::sdk::BehaviorTree>>>(l, (api::sdk::BehaviorTree*)obj);
                         break;
-                    case "via.behaviortree.BehaviorTree.CoreHandle"_fnv: [[fallthrough]];
-                    case "via.motion.MotionFsm2Layer"_fnv: [[fallthrough]];
-                    case "via.timeline.TimelineFsm2Layer"_fnv:
+                    case static_cast<uint32_t>("via.behaviortree.BehaviorTree.CoreHandle"_fnv): [[fallthrough]];
+                    case static_cast<uint32_t>("via.motion.MotionFsm2Layer"_fnv): [[fallthrough]];
+                    case static_cast<uint32_t>("via.timeline.TimelineFsm2Layer"_fnv):
                         backpedal = sol::stack::push<sol::detail::as_pointer_tag<std::remove_pointer_t<api::sdk::BehaviorTreeCoreHandle>>>(l, (api::sdk::BehaviorTreeCoreHandle*)obj);
                         break;
                     default:

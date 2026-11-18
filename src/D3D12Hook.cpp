@@ -18,6 +18,9 @@
 #include "WindowFilter.hpp"
 
 #include "D3D12Hook.hpp"
+#include "utility/SubmittedQueueSelection.hpp"
+
+D3D12Hook::Streamline D3D12Hook::s_streamline{};
 
 static D3D12Hook* g_d3d12_hook = nullptr;
 using ExecuteCommandListsFn = void (STDMETHODCALLTYPE*)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
@@ -93,6 +96,20 @@ HRESULT WINAPI D3D12Hook::create_swapchain(IDXGIFactory4* factory, IUnknown* dev
     // rather than waiting on the hook monitor to notice the hook isn't working
     if (!hook_was_nullptr) {
         g_framework->hook_d3d12();
+        if (SUCCEEDED(result) && swap_chain != nullptr && *swap_chain != nullptr &&
+            g_d3d12_hook != nullptr && g_d3d12_hook->m_using_submission_capture) {
+            Microsoft::WRL::ComPtr<ID3D12CommandQueue> present_queue;
+            Microsoft::WRL::ComPtr<IDXGISwapChain3> created_swapchain;
+            if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(present_queue.GetAddressOf()))) &&
+                SUCCEEDED((*swap_chain)->QueryInterface(IID_PPV_ARGS(created_swapchain.GetAddressOf()))) &&
+                present_queue->GetDesc().Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
+                g_d3d12_hook->m_captured_queue = present_queue;
+                g_d3d12_hook->m_captured_queue_swapchain = created_swapchain.Get();
+                g_d3d12_hook->m_command_queue = present_queue.Get();
+                spdlog::info("DX12 queue capture: exact CreateSwapChainForHwnd queue={:x}, swapchain={:x}",
+                    (uintptr_t)present_queue.Get(), (uintptr_t)created_swapchain.Get());
+            }
+        }
     }
 
     return result;
@@ -552,6 +569,7 @@ bool D3D12Hook::unhook() {
     m_execute_hook.reset();
     m_submitted_queues.clear();
     m_captured_queue.Reset();
+    m_captured_queue_swapchain = nullptr;
     m_command_queue = nullptr;
     m_using_submission_capture = false;
     m_queue_wait_logged = false;
@@ -577,8 +595,12 @@ void STDMETHODCALLTYPE D3D12Hook::execute_command_lists(ID3D12CommandQueue* queu
     if (g_inside_d3d12_hook || count == 0 || g_framework == nullptr) {
         return;
     }
-    // Match Present/unhook locking; never hold this lock during the original submission.
-    std::scoped_lock lock{g_framework->get_hook_monitor_mutex()};
+    // Present may hold this mutex while waiting for a fence signalled by the
+    // submitting worker. Never block that worker after the real submission.
+    std::unique_lock lock{g_framework->get_hook_monitor_mutex(), std::try_to_lock};
+    if (!lock.owns_lock()) {
+        return;
+    }
     auto* hook = g_d3d12_hook;
     if (hook == nullptr || !hook->m_using_submission_capture ||
         queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT) {
@@ -599,43 +621,41 @@ void STDMETHODCALLTYPE D3D12Hook::execute_command_lists(ID3D12CommandQueue* queu
         (uintptr_t)queue, GetCurrentThreadId());
 }
 
-bool D3D12Hook::select_submitted_queue(ID3D12Device* device) {
+bool D3D12Hook::select_submitted_queue(ID3D12Device* device, IDXGISwapChain3* swap_chain) {
     // D3DMetal may reject IID_IUnknown: compare the same supported base interface.
     Microsoft::WRL::ComPtr<ID3D12Device> identity;
     if (FAILED(device->QueryInterface(IID_PPV_ARGS(identity.GetAddressOf())))) {
+        m_captured_queue.Reset();
+        m_captured_queue_swapchain = nullptr;
+        m_command_queue = nullptr;
         return false;
     }
-    ID3D12CommandQueue* sole = nullptr;
-    ID3D12CommandQueue* same_thread = nullptr;
-    size_t matches = 0;
-    size_t thread_matches = 0;
-    for (auto& entry : m_submitted_queues) {
+    const auto matches_device = [&](ID3D12CommandQueue* queue) {
         Microsoft::WRL::ComPtr<ID3D12Device> queue_device;
         Microsoft::WRL::ComPtr<ID3D12Device> queue_identity;
-        if (FAILED(entry.queue->GetDevice(IID_PPV_ARGS(queue_device.GetAddressOf()))) ||
-            FAILED(queue_device->QueryInterface(IID_PPV_ARGS(queue_identity.GetAddressOf()))) ||
-            queue_identity.Get() != identity.Get()) {
-            continue;
-        }
-        sole = entry.queue.Get();
-        ++matches;
-        if (entry.thread_id == GetCurrentThreadId()) {
-            same_thread = entry.queue.Get();
-            ++thread_matches;
-        }
-    }
-    auto* selected = thread_matches == 1 ? same_thread : (matches == 1 ? sole : nullptr);
-    if (selected == nullptr) {
+        return SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(queue_device.GetAddressOf()))) &&
+            SUCCEEDED(queue_device->QueryInterface(IID_PPV_ARGS(queue_identity.GetAddressOf()))) &&
+            queue_identity.Get() == identity.Get();
+    };
+    const auto choice = utility::d3d12::select_submitted_queue(m_captured_queue.Get(),
+        m_captured_queue_swapchain == swap_chain, m_submitted_queues,
+        GetCurrentThreadId(), matches_device);
+    if (choice.queue == nullptr) {
+        m_captured_queue.Reset();
+        m_captured_queue_swapchain = nullptr;
+        m_command_queue = nullptr;
         if (!m_queue_wait_logged) {
             spdlog::warn("DX12 queue capture: observed={}, matching_device={}, matching_thread={}",
-                m_submitted_queues.size(), matches, thread_matches);
+                m_submitted_queues.size(), choice.matching_device, choice.matching_thread);
         }
         return false;
     }
-    if (m_captured_queue.Get() != selected) {
-        m_captured_queue = selected;
-        spdlog::info("DX12 queue capture: selected queue={:x}, device={:x}, same_thread={}",
-            (uintptr_t)selected, (uintptr_t)device, thread_matches == 1);
+    if (!choice.retained) {
+        m_captured_queue = choice.queue;
+        m_captured_queue_swapchain = swap_chain;
+        spdlog::info("DX12 queue capture: pinned queue={:x}, device={:x}, swapchain={:x}, same_thread={}",
+            (uintptr_t)choice.queue, (uintptr_t)device, (uintptr_t)swap_chain,
+            choice.matching_thread == 1);
         spdlog::default_logger()->flush();
     }
     m_command_queue = m_captured_queue.Get();
@@ -680,7 +700,7 @@ HRESULT WINAPI D3D12Hook::present(IDXGISwapChain3* swap_chain, uint64_t sync_int
         const auto result = swap_chain->GetDevice(IID_PPV_ARGS(device.GetAddressOf()));
         if (FAILED(result) ||
             FAILED(device->QueryInterface(IID_PPV_ARGS(device4.GetAddressOf()))) ||
-            !d3d12->select_submitted_queue(device.Get())) {
+            !d3d12->select_submitted_queue(device.Get(), swap_chain)) {
             if (!d3d12->m_queue_wait_logged) {
                 spdlog::warn("DX12 queue capture: waiting for compatible device and unambiguous DIRECT queue; GetDevice HRESULT={:08x}", (uint32_t)result);
                 spdlog::default_logger()->flush();

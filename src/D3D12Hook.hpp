@@ -120,12 +120,13 @@ protected:
     };
     std::vector<SubmittedQueue> m_submitted_queues;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> m_captured_queue;
+    IDXGISwapChain3* m_captured_queue_swapchain{};
     std::unique_ptr<PointerHook> m_execute_hook;
     bool m_using_submission_capture{false};
     bool m_queue_wait_logged{false};
     static void STDMETHODCALLTYPE execute_command_lists(ID3D12CommandQueue* queue,
         UINT count, ID3D12CommandList* const* lists);
-    bool select_submitted_queue(ID3D12Device* device);
+    bool select_submitted_queue(ID3D12Device* device, IDXGISwapChain3* swap_chain);
 
     uint32_t m_command_queue_offset{};
     uint32_t m_proton_swapchain_offset{};
@@ -148,7 +149,7 @@ protected:
         bool setup{ false };
     };
 
-    static inline Streamline s_streamline{};
+    static Streamline s_streamline;
 
     // This is static because unhooking it seems to cause a crash sometimes
     static inline std::unique_ptr<PointerHook> s_create_swapchain_hook{};

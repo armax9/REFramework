@@ -58,7 +58,7 @@ template <typename T> struct NativeArray {
 
         if (new_size == 0) {
             clear();
-            return;
+            return true;
         }
 
         if (new_size > num_allocated) {
@@ -236,7 +236,7 @@ struct NativeArrayNoCapacity {
 
         if (new_size == 0) {
             clear();
-            return;
+            return true;
         }
 
         if (new_size > num_allocated || elements == nullptr) {

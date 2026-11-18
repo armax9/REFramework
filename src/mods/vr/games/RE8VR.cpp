@@ -88,6 +88,8 @@ void RE8VR::on_lua_state_created(sol::state& lua) {
         "wants_block", &RE8VR::m_wants_block,
         "wants_heal", &RE8VR::m_wants_heal,
         "delta_time", &RE8VR::m_delta_time,
+        "vr_world_scale", &RE8VR::m_vr_world_scale,
+        "vr_body_ik_offset", &RE8VR::m_vr_body_ik_offset,
         "movement_speed_rate", &RE8VR::m_movement_speed_rate,
         "set_hand_joints_to_tpose", &RE8VR::set_hand_joints_to_tpose,
         "update_hand_ik", &RE8VR::update_hand_ik,
@@ -313,8 +315,15 @@ void RE8VR::update_hand_ik() {
 
     const auto hmd_transform = vr->get_transform(0);
 
-    const auto left_controller_offset = left_controller_transform[3] - hmd_transform[3];
-    const auto right_controller_offset = right_controller_transform[3] - hmd_transform[3];
+    auto left_controller_offset = left_controller_transform[3] - hmd_transform[3];
+    auto right_controller_offset = right_controller_transform[3] - hmd_transform[3];
+
+#ifdef RE8
+    if (m_player_type == PlayerType::ROSE && m_vr_world_scale != 1.0f) {
+        left_controller_offset *= m_vr_world_scale;
+        right_controller_offset *= m_vr_world_scale;
+    }
+#endif
 
     auto camera = sdk::get_primary_camera();
     const auto camera_rotation = glm::quat{vr->get_last_render_matrix()};
@@ -720,7 +729,14 @@ void RE8VR::fix_player_camera(::REManagedObject* player_camera) {
         sdk::set_joint_rotation(camera_joint, camera_rot_pre_hmd * utility::math::to_quat(forward));
     }
 
-    update_body_ik(&camera_rot, &camera_pos);
+    auto body_ik_camera_pos = camera_pos;
+#ifdef RE8
+    if (m_player_type == PlayerType::ROSE) {
+        body_ik_camera_pos -= m_vr_body_ik_offset;
+        body_ik_camera_pos.w = 1.0f;
+    }
+#endif
+    update_body_ik(&camera_rot, &body_ik_camera_pos);
 
     glm::quat slerp_quat{};
 
@@ -1086,6 +1102,16 @@ void RE8VR::fix_player_shadow() {
     toggle_enabled(lower_body_mesh_field, !wants_hide_lower_body);
     toggle_enabled(l_arm_mesh_field, !wants_hide_arms);
     toggle_enabled(r_arm_mesh_field, !wants_hide_arms);
+
+#ifdef RE8
+    if (m_player_type == PlayerType::ROSE) {
+        static auto rose_mesh_controller = sdk::find_type_definition("app.PlayerMeshControllerPl3000");
+        static auto jacket_mesh_field = rose_mesh_controller != nullptr ? rose_mesh_controller->get_field("JacketMesh") : nullptr;
+        static auto sling_mesh_field = rose_mesh_controller != nullptr ? rose_mesh_controller->get_field("SlingMesh") : nullptr;
+        toggle_enabled(jacket_mesh_field, !wants_hide_upper_body);
+        toggle_enabled(sling_mesh_field, !wants_hide_upper_body);
+    }
+#endif
 }
 
 ::REManagedObject* RE8VR::get_localplayer() const {
@@ -1167,6 +1193,20 @@ void RE8VR::fix_player_shadow() {
         static auto get_equip_weapon_object_method = sdk::find_method_definition("app.PlayerGunPl2001", "get_equipWeaponObject");
 
         return get_equip_weapon_object_method->call<::REManagedObject*>(sdk::get_thread_context(), player_gun);
+    } else if (m_player_type == PlayerType::ROSE) {
+        static auto get_player_gun_method = find_fps_method("app.pl3000.PlayerUpdaterPl3000", "get_playerGun");
+        if (get_player_gun_method == nullptr) {
+            return nullptr;
+        }
+        auto player_gun = get_player_gun_method->call<::REManagedObject*>(sdk::get_thread_context(), m_updater);
+        if (player_gun == nullptr) {
+            return nullptr;
+        }
+        static auto get_weapon_gun_method = sdk::find_method_definition("app.pl3000.PlayerGunPl3000", "get_weaponGun");
+        if (get_weapon_gun_method == nullptr) {
+            return nullptr;
+        }
+        return get_weapon_gun_method->call<::REManagedObject*>(sdk::get_thread_context(), player_gun);
     }
 
     return nullptr;
@@ -1230,6 +1270,14 @@ bool RE8VR::update_pointers() {
     } else {
         m_player_type = PlayerType::ETHAN;
     }
+
+    if (m_updater == nullptr) {
+        static auto rose_updater_def = sdk::find_type_definition("app.pl3000.PlayerUpdaterPl3000");
+        assign_component(m_updater, rose_updater_def != nullptr ? rose_updater_def->get_type() : nullptr);
+        if (m_updater != nullptr) {
+            m_player_type = PlayerType::ROSE;
+        }
+    }
 #else
     m_player_type = PlayerType::ETHAN;
 #endif
@@ -1241,6 +1289,10 @@ bool RE8VR::update_pointers() {
     if (m_order == nullptr) {
         static auto order_type_chris = get_ambiguous_re_type("app.PlayerOrderPl2001");
         assign_component(m_order, order_type_chris);
+    }
+    if (m_order == nullptr) {
+        static auto rose_order_def = sdk::find_type_definition("app.pl3000.PlayerOrderPl3000");
+        assign_component(m_order, rose_order_def != nullptr ? rose_order_def->get_type() : nullptr);
     }
 #endif
 

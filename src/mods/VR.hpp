@@ -3,6 +3,7 @@
 #include <chrono>
 #include <bitset>
 #include <memory>
+#include <atomic>
 #include <shared_mutex>
 
 #include <openvr.h>
@@ -80,8 +81,8 @@ public:
     void on_wait_rendering(void* entry);
 
     template<typename T = VRRuntime>
-    T* get_runtime() const {
-        return (T*)m_runtime.get();
+    std::shared_ptr<T> get_runtime() const {
+        return std::static_pointer_cast<T>(std::atomic_load_explicit(&m_runtime, std::memory_order_acquire));
     }
 
     auto get_hmd() const {
@@ -181,8 +182,10 @@ public:
     Matrix4x4f get_transform(uint32_t index) const;
     vr::HmdMatrix34_t get_raw_transform(uint32_t index) const;
 
-    const auto& get_eyes() const {
-        return get_runtime()->eyes;
+    auto get_eyes() const {
+        const auto runtime = get_runtime();
+        std::shared_lock lock{runtime->eyes_mtx};
+        return runtime->eyes;
     }
 
     void apply_hmd_transform(glm::quat& rotation, Vector4f& position);
@@ -219,7 +222,11 @@ public:
     const auto& get_action_handles() const { return m_action_handles;}
 
     auto get_ui_scale() const { return m_ui_scale_option->value(); }
-    const auto& get_raw_projections() const { return get_runtime()->raw_projections; }
+    auto get_raw_projections() const {
+        const auto runtime = get_runtime();
+        std::shared_lock lock{runtime->eyes_mtx};
+        return runtime->raw_projections;
+    }
 
     void unhide_crosshair() {
         m_last_crosshair_hide = std::chrono::steady_clock::now();
@@ -239,9 +246,13 @@ public:
     }
 
 private:
-    Vector4f get_position_unsafe(uint32_t index) const;
-    Vector4f get_velocity_unsafe(uint32_t index) const;
-    Vector4f get_angular_velocity_unsafe(uint32_t index) const;
+    void set_runtime(std::shared_ptr<VRRuntime> runtime) {
+        std::atomic_store_explicit(&m_runtime, std::move(runtime), std::memory_order_release);
+    }
+
+    Vector4f get_position_unsafe(uint32_t index, const std::shared_ptr<VRRuntime>& runtime) const;
+    Vector4f get_velocity_unsafe(uint32_t index, const std::shared_ptr<VRRuntime>& runtime) const;
+    Vector4f get_angular_velocity_unsafe(uint32_t index, const std::shared_ptr<VRRuntime>& runtime) const;
 
 private:
     // Hooks
@@ -313,8 +324,7 @@ private:
         spdlog::info("Reinitializing OpenVR");
         std::scoped_lock _{m_openvr_mtx};
 
-        m_runtime.reset();
-        m_runtime = std::make_shared<VRRuntime>();
+        set_runtime(std::make_shared<VRRuntime>());
         m_openvr.reset();
 
         // Reinitialize openvr input, hopefully this fixes the issue
@@ -334,6 +344,8 @@ private:
         spdlog::info("Reinitializing OpenXR");
         std::scoped_lock _{m_openvr_mtx};
 
+        set_runtime(std::make_shared<VRRuntime>());
+
         if (m_is_d3d12) {
             m_d3d12.openxr().destroy_swapchains();
         } else {
@@ -341,8 +353,6 @@ private:
         }
 
         m_openxr.reset();
-        m_runtime.reset();
-        m_runtime = std::make_shared<VRRuntime>();
         
         m_controllers.clear();
         m_controllers_set.clear();

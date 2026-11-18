@@ -132,7 +132,9 @@ void TemporalUpscaler::on_draw_ui() {
     //if (ImGui::Checkbox("Sharpness", &m_sharpness)) {
     if (m_sharpness->draw("Sharpness")) {
         release_upscale_features();
-        init_upscale_features();
+        if (!init_upscale_features()) {
+            return;
+        }
     }
 
     //ImGui::DragFloat("Sharpness Amount", &m_sharpness_amount, 0.01f, 0.0f, 5.0f);
@@ -157,19 +159,25 @@ void TemporalUpscaler::on_draw_ui() {
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         release_upscale_features();
-        init_upscale_features();
+        if (!init_upscale_features()) {
+            return;
+        }
     }
 
     /*if (ImGui::Combo("Quality Level", (int*)&m_upscale_quality, "Performance\0Balanced\0Quality\0UltraPerformance\0")) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         release_upscale_features();
-        init_upscale_features();
+        if (!init_upscale_features()) {
+            return;
+        }
     }*/
 
     if (m_upscale_quality->draw("Quality Level")) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         release_upscale_features();
-        init_upscale_features();
+        if (!init_upscale_features()) {
+            return;
+        }
     }
 
     ImGui::SetNextItemOpen(true, ImGuiCond_Once);
@@ -454,12 +462,31 @@ bool TemporalUpscaler::on_first_frame() {
         spdlog::info("[TemporalUpscaler] {}", msg);
     });
 
+    if (m_is_d3d12 && m_upscale_type == PDUpscaleType::DLSS &&
+        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != nullptr) {
+        char metalfx[8]{};
+        GetEnvironmentVariableA("D3DM_ENABLE_METALFX", metalfx, sizeof(metalfx));
+        if (metalfx[0] == '0' && metalfx[1] == '\0') {
+            spdlog::error("[TemporalUpscaler] DLSS disabled: D3DM_ENABLE_METALFX=0; the Wine D3D12 NGX backend requires MetalFX.");
+            m_enabled->value() = false;
+            m_wants_reinitialize = false;
+            return false;
+        }
+    }
+
+    bool backend_ready = false;
     if (m_is_d3d12) {
         auto& hook = g_framework->get_d3d12_hook();
-        SetupDirectX(hook->get_command_queue(), PDGraphicsAPI::D3D12);
+        backend_ready = SetupDirectX(hook->get_command_queue(), PDGraphicsAPI::D3D12);
     } else {
         auto& hook = g_framework->get_d3d11_hook();
-        SetupDirectX(hook->get_device(), PDGraphicsAPI::D3D11);
+        backend_ready = SetupDirectX(hook->get_device(), PDGraphicsAPI::D3D11);
+    }
+    if (!backend_ready) {
+        spdlog::error("[TemporalUpscaler] SetupDirectX failed; disabling the upscaler.");
+        m_enabled->value() = false;
+        m_wants_reinitialize = false;
+        return false;
     }
 
     if (!init_upscale_features()) {
@@ -473,6 +500,18 @@ bool TemporalUpscaler::on_first_frame() {
 
 bool TemporalUpscaler::init_upscale_features() {
     spdlog::info("[TemporalUpscaler] Initializing upscale features...");
+
+    const auto disable_after_failure = [this](const char* reason) {
+        spdlog::error("[TemporalUpscaler] {}; disabling the upscaler.", reason);
+        // Release only features which returned an actual output texture.
+        release_upscale_features();
+        m_enabled->value() = false;
+        m_initialized = false;
+        m_backend_loaded = false;
+        m_wants_reinitialize = false;
+        m_set_view = false;
+        return false;
+    };
 
     uint32_t out_w = 0;
     uint32_t out_h = 0;
@@ -545,11 +584,17 @@ bool TemporalUpscaler::init_upscale_features() {
     params.enableSharpening = m_sharpness->value();
     params.enableAutoExposure = false;
     m_upscaled_textures[0] = InitUpscaler(&params);
+    if (m_upscaled_textures[0] == nullptr) {
+        return disable_after_failure("InitUpscaler failed for the left eye");
+    }
 
     // Right eye.
     if (VR::get()->is_hmd_active()) {
         params.id = get_evaluate_id(1);
         m_upscaled_textures[1] = InitUpscaler(&params);
+        if (m_upscaled_textures[1] == nullptr) {
+            return disable_after_failure("InitUpscaler failed for the right eye");
+        }
     }
 
     update_motion_scale();

@@ -1,6 +1,17 @@
-# Wine / CrossOver experimental RE7 VR build
+# RE7 and RE8 VR on macOS / CrossOver
 
-See [WINE-CROSSOVER.md](WINE-CROSSOVER.md) for this fork's fixes, installation and limitations. Download the tested DLL from [this fork's releases](https://github.com/armax9/REFramework/releases).
+Experimental Wine/CrossOver compatibility builds based on praydog's REFramework.
+
+**[Download version 0.2](https://github.com/armax9/REFramework/releases/tag/v0.2.0-wine-crossover-experimental)** — choose the archive for your game. Each archive contains a different Windows x64 `dinput8.dll`.
+
+| Game | Version 0.2 | Installation |
+| --- | --- | --- |
+| Resident Evil 7 | Previously tested 0.1 DLL, unchanged | [RE7 guide](WINE-CROSSOVER.md) |
+| Resident Evil Village / Shadows of Rose | New tested RE8 compatibility build | [RE8 guide](RE8-WINE-CROSSOVER.md) |
+
+RE8 adds rendering-queue, OpenXR lifetime and upscaler initialization fixes, plus native Rose integration for the original Shadows of Rose scripts. Third-party Lua mods and upscaler backends are installed separately.
+
+These are Windows game builds running through CrossOver and D3DMetal on Apple Silicon. The guides describe the tested configurations and limits.
 
 ---
 

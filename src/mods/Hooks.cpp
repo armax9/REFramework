@@ -121,26 +121,26 @@ void Hooks::on_draw_ui() {
 }
 
 #define LAYER_HOOK_BODY(x, x2, x3) \
-void Hooks::RenderLayerHook<sdk::renderer::layer::##x2##>::##x3##(sdk::renderer::layer::##x2##* layer, void* render_ctx) {\
+template<> void Hooks::RenderLayerHook<sdk::renderer::layer::x2>::x3(sdk::renderer::layer::x2* layer, void* render_ctx) {\
     if (!g_framework->is_ready()) {\
-        auto original_func = g_hook->m_layer_hooks.##x##.##x3##_hook->get_original<decltype(RenderLayerHook<sdk::renderer::layer::##x2##>::##x3##)>();\
+        auto original_func = g_hook->m_layer_hooks.x.x3##_hook->get_original<decltype(RenderLayerHook<sdk::renderer::layer::x2>::x3)>();\
         original_func(layer, render_ctx); \
         return; \
     } \
     bool any_false = false; \
     const auto& mods = g_framework->get_mods()->get_mods(); \
     for (auto& mod : mods) { \
-        const auto result = mod->on_pre_##x##_layer_##x3##(layer, render_ctx); \
+        const auto result = mod->on_pre_##x##_layer_##x3(layer, render_ctx); \
         if (!result) { \
             any_false = true; \
         } \
     } \
     if (!any_false) { \
-        auto original_func = g_hook->m_layer_hooks.##x##.##x3##_hook->get_original<decltype(RenderLayerHook<sdk::renderer::layer::##x2##>::##x3##)>();\
+        auto original_func = g_hook->m_layer_hooks.x.x3##_hook->get_original<decltype(RenderLayerHook<sdk::renderer::layer::x2>::x3)>();\
         original_func(layer, render_ctx); \
     } \
     for (auto& mod : mods) { \
-        mod->on_##x##_layer_##x3##(layer, render_ctx); \
+        mod->on_##x##_layer_##x3(layer, render_ctx); \
     }\
 }
 

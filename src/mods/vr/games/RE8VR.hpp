@@ -73,6 +73,7 @@ private:
     enum PlayerType {
         ETHAN = 0,
         CHRIS_MERC = 1,
+        ROSE = 2,
     };
 
     PlayerType m_player_type{PlayerType::ETHAN};
@@ -138,6 +139,9 @@ private:
 
     float m_delta_time{1.0f/60.0f};
     float m_movement_speed_rate{0.0f};
+
+    Vector4f m_vr_body_ik_offset{0.0f, 0.0f, 0.0f, 0.0f};
+    float m_vr_world_scale{1.0f};
 
     struct HealGesture {
         bool was_grip_down{false};

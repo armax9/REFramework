@@ -359,10 +359,10 @@ protected:
 
 // Render layer hooks
 #define MAKE_LAYER_CALLBACK(T, x) \
-    virtual bool on_pre_##x ##_layer_draw(sdk::renderer::layer::##T * layer, void* render_context) { return true; }; \
-    virtual void on_##x ##_layer_draw(sdk::renderer::layer::##T * layer, void* render_context) {}; \
-    virtual bool on_pre_ ##x ##_layer_update(sdk::renderer::layer::##T * layer, void* render_context) { return true; }; \
-    virtual void on_##x ##_layer_update(sdk::renderer::layer::##T * layer, void* render_context) {};
+    virtual bool on_pre_##x ##_layer_draw(sdk::renderer::layer::T * layer, void* render_context) { return true; }; \
+    virtual void on_##x ##_layer_draw(sdk::renderer::layer::T * layer, void* render_context) {}; \
+    virtual bool on_pre_ ##x ##_layer_update(sdk::renderer::layer::T * layer, void* render_context) { return true; }; \
+    virtual void on_##x ##_layer_update(sdk::renderer::layer::T * layer, void* render_context) {};
 
 class Mod {
 protected:

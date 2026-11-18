@@ -898,7 +898,7 @@ and place the openxr_loader.dll in the same folder.)";
 } catch(...) {
     spdlog::error("Exception occurred in VR::on_initialize()");
 
-    m_runtime->error = "Exception occurred in VR::on_initialize()";
+    get_runtime()->error = "Exception occurred in VR::on_initialize()";
     m_openxr->dll_missing = false;
     m_openvr->dll_missing = false;
     m_openxr->error = "Exception occurred in VR::on_initialize()";
@@ -1034,7 +1034,7 @@ std::optional<std::string> VR::initialize_openvr() {
     
     m_openvr->loaded = true;
     m_openvr->error = std::nullopt;
-    m_runtime = m_openvr;
+    set_runtime(m_openvr);
 
     return Mod::on_initialize();
 }
@@ -1266,7 +1266,7 @@ std::optional<std::string> VR::initialize_openxr() {
     }
 
     m_openxr->loaded = true;
-    m_runtime = m_openxr;
+    set_runtime(m_openxr);
 
     if (auto err = initialize_openxr_input()) {
         m_openxr->error = err.value();
@@ -1543,7 +1543,7 @@ bool VR::detect_controllers() {
 }
 
 bool VR::is_any_action_down() {
-    if (!m_runtime->ready() || !is_using_controllers()) {
+    if (!get_runtime()->ready() || !is_using_controllers()) {
         return false;
     }
 
@@ -1598,7 +1598,7 @@ void VR::update_hmd_state() {
     if (runtime->wants_reset_origin && runtime->ready() && runtime->got_first_valid_poses) {
         std::unique_lock _{ runtime->pose_mtx };
         set_rotation_offset(glm::identity<glm::quat>());
-        m_standing_origin = get_position_unsafe(vr::k_unTrackedDeviceIndex_Hmd);
+        m_standing_origin = get_position_unsafe(vr::k_unTrackedDeviceIndex_Hmd, runtime);
 
         runtime->wants_reset_origin = false;
     }
@@ -2392,19 +2392,22 @@ int32_t VR::get_game_frame_count() const {
 }
 
 float VR::get_standing_height() {
-    std::shared_lock _{ get_runtime()->pose_mtx };
+    const auto runtime = get_runtime();
+    std::shared_lock _{ runtime->pose_mtx };
 
     return m_standing_origin.y;
 }
 
 Vector4f VR::get_standing_origin() {
-    std::shared_lock _{ get_runtime()->pose_mtx };
+    const auto runtime = get_runtime();
+    std::shared_lock _{ runtime->pose_mtx };
 
     return m_standing_origin;
 }
 
 void VR::set_standing_origin(const Vector4f& origin) {
-    std::unique_lock _{ get_runtime()->pose_mtx };
+    const auto runtime = get_runtime();
+    std::unique_lock _{ runtime->pose_mtx };
     
     m_standing_origin = origin;
 }
@@ -2445,83 +2448,88 @@ void VR::recenter_gui(const glm::quat& from) {
 }
 
 Vector4f VR::get_current_offset() {
+    const auto runtime = get_runtime();
     if (!is_hmd_active()) {
         return Vector4f{};
     }
 
-    std::shared_lock _{ get_runtime()->eyes_mtx };
+    std::shared_lock _{ runtime->eyes_mtx };
 
     const auto count = is_using_multipass() ? m_multipass.pass : m_frame_count;
 
     if (count % 2 == m_left_eye_interval) {
         //return Vector4f{m_eye_distance * -1.0f, 0.0f, 0.0f, 0.0f};
-        return get_runtime()->eyes[vr::Eye_Left][3];
+        return runtime->eyes[vr::Eye_Left][3];
     }
     
-    return get_runtime()->eyes[vr::Eye_Right][3];
+    return runtime->eyes[vr::Eye_Right][3];
     //return Vector4f{m_eye_distance, 0.0f, 0.0f, 0.0f};
 }
 
 Matrix4x4f VR::get_current_eye_transform(bool flip) {
+    const auto runtime = get_runtime();
     if (!is_hmd_active()) {
         return glm::identity<Matrix4x4f>();
     }
 
-    std::shared_lock _{get_runtime()->eyes_mtx};
+    std::shared_lock _{runtime->eyes_mtx};
 
     const auto count = is_using_multipass() ? m_multipass.pass : m_frame_count;
     const auto mod_count = flip ? m_right_eye_interval : m_left_eye_interval;
 
     if (count % 2 == mod_count) {
-        return get_runtime()->eyes[vr::Eye_Left];
+        return runtime->eyes[vr::Eye_Left];
     }
 
-    return get_runtime()->eyes[vr::Eye_Right];
+    return runtime->eyes[vr::Eye_Right];
 }
 
 Matrix4x4f VR::get_current_projection_matrix(bool flip) {
+    const auto runtime = get_runtime();
     if (!is_hmd_active()) {
         return glm::identity<Matrix4x4f>();
     }
 
-    std::shared_lock _{get_runtime()->eyes_mtx};
+    std::shared_lock _{runtime->eyes_mtx};
 
     const auto count = is_using_multipass() ? m_multipass.pass : m_frame_count;
     const auto mod_count = flip ? m_right_eye_interval : m_left_eye_interval;
 
     if (count % 2 == mod_count) {
-        return get_runtime()->projections[(uint32_t)VRRuntime::Eye::LEFT];
+        return runtime->projections[(uint32_t)VRRuntime::Eye::LEFT];
     }
 
-    return get_runtime()->projections[(uint32_t)VRRuntime::Eye::RIGHT];
+    return runtime->projections[(uint32_t)VRRuntime::Eye::RIGHT];
 }
 
 Matrix4x4f VR::get_projection_matrix(uint32_t pass) {
+    const auto runtime = get_runtime();
     if (!is_hmd_active()) {
         return glm::identity<Matrix4x4f>();
     }
 
-    std::shared_lock _{get_runtime()->eyes_mtx};
+    std::shared_lock _{runtime->eyes_mtx};
 
     if (pass % 2 == 0) {
-        return get_runtime()->projections[(uint32_t)VRRuntime::Eye::LEFT];
+        return runtime->projections[(uint32_t)VRRuntime::Eye::LEFT];
     }
 
-    return get_runtime()->projections[(uint32_t)VRRuntime::Eye::RIGHT];
+    return runtime->projections[(uint32_t)VRRuntime::Eye::RIGHT];
 }
 
 Matrix4x4f VR::get_eye_transform(uint32_t pass) {
+    const auto runtime = get_runtime();
     if (!is_hmd_active()) {
         return glm::identity<Matrix4x4f>();
     }
 
-    std::shared_lock _{get_runtime()->eyes_mtx};
+    std::shared_lock _{runtime->eyes_mtx};
 
     if (pass % 2 == 0) {
-        return get_runtime()->eyes[vr::Eye_Left];
+        return runtime->eyes[vr::Eye_Left];
     }
 
-    return get_runtime()->eyes[vr::Eye_Right];
+    return runtime->eyes[vr::Eye_Right];
 }
 
 void VR::on_pre_imgui_frame() {
@@ -3628,7 +3636,8 @@ void VR::on_wait_rendering(void* entry) {
 }
 
 void VR::on_pre_application_entry(void* entry, const char* name, size_t hash) {
-    if (!get_runtime()->loaded) {
+    const auto runtime = get_runtime();
+    if (!runtime || !runtime->loaded) {
         return;
     }
 
@@ -3653,7 +3662,8 @@ void VR::on_pre_application_entry(void* entry, const char* name, size_t hash) {
 }
 
 void VR::on_application_entry(void* entry, const char* name, size_t hash) {
-    if (!get_runtime()->loaded) {
+    const auto runtime = get_runtime();
+    if (!runtime || !runtime->loaded) {
         return;
     }
 
@@ -4313,58 +4323,62 @@ std::array<RECamera*, 2> VR::get_cameras() const {
 }
 
 Vector4f VR::get_position(uint32_t index) const {
+    const auto runtime = get_runtime();
     if (index >= vr::k_unMaxTrackedDeviceCount) {
         return Vector4f{};
     }
 
-    std::shared_lock _{ get_runtime()->pose_mtx };
-    std::shared_lock __{ get_runtime()->eyes_mtx };
+    std::shared_lock _{ runtime->pose_mtx };
+    std::shared_lock __{ runtime->eyes_mtx };
 
-    return get_position_unsafe(index);
+    return get_position_unsafe(index, runtime);
 }
 
 Vector4f VR::get_velocity(uint32_t index) const {
+    const auto runtime = get_runtime();
     if (index >= vr::k_unMaxTrackedDeviceCount) {
         return Vector4f{};
     }
 
-    std::shared_lock _{ get_runtime()->pose_mtx };
+    std::shared_lock _{ runtime->pose_mtx };
 
-    return get_velocity_unsafe(index);
+    return get_velocity_unsafe(index, runtime);
 }
 
 Vector4f VR::get_angular_velocity(uint32_t index) const {
+    const auto runtime = get_runtime();
     if (index >= vr::k_unMaxTrackedDeviceCount) {
         return Vector4f{};
     }
 
-    std::shared_lock _{ get_runtime()->pose_mtx };
+    std::shared_lock _{ runtime->pose_mtx };
 
-    return get_angular_velocity_unsafe(index);
+    return get_angular_velocity_unsafe(index, runtime);
 }
 
-Vector4f VR::get_position_unsafe(uint32_t index) const {
-    if (get_runtime()->is_openvr()) {
+Vector4f VR::get_position_unsafe(uint32_t index, const std::shared_ptr<VRRuntime>& runtime) const {
+    if (runtime->is_openvr()) {
         if (index >= vr::k_unMaxTrackedDeviceCount) {
             return Vector4f{};
         }
 
-        auto& pose = get_openvr_poses()[index];
+        auto& pose = std::static_pointer_cast<runtimes::OpenVR>(runtime)->render_poses[index];
         auto matrix = Matrix4x4f{ *(Matrix3x4f*)&pose.mDeviceToAbsoluteTracking };
         auto result = glm::rowMajor4(matrix)[3];
         result.w = 1.0f;
 
         return result;
-    } else if (get_runtime()->is_openxr()) {
+    } else if (runtime->is_openxr()) {
+        const auto openxr = std::static_pointer_cast<runtimes::OpenXR>(runtime);
         if (index >= 3) {
             return Vector4f{};
         }
 
         // HMD position
-        if (index == 0 && !m_openxr->stage_views.empty()) {
-            return Vector4f{ *(Vector3f*)&m_openxr->view_space_location.pose.position, 1.0f };
+        if (index == 0 && !openxr->stage_views.empty()) {
+            return Vector4f{ *(Vector3f*)&openxr->view_space_location.pose.position, 1.0f };
         } else if (index > 0) {
-            return Vector4f{ *(Vector3f*)&m_openxr->hands[index-1].location.pose.position, 1.0f };
+            return Vector4f{ *(Vector3f*)&openxr->hands[index-1].location.pose.position, 1.0f };
         }
 
         return Vector4f{};
@@ -4373,17 +4387,18 @@ Vector4f VR::get_position_unsafe(uint32_t index) const {
     return Vector4f{};
 }
 
-Vector4f VR::get_velocity_unsafe(uint32_t index) const {
-    if (get_runtime()->is_openvr()) {
+Vector4f VR::get_velocity_unsafe(uint32_t index, const std::shared_ptr<VRRuntime>& runtime) const {
+    if (runtime->is_openvr()) {
         if (index >= vr::k_unMaxTrackedDeviceCount) {
             return Vector4f{};
         }
 
-        const auto& pose = get_openvr_poses()[index];
+        const auto& pose = std::static_pointer_cast<runtimes::OpenVR>(runtime)->render_poses[index];
         const auto& velocity = pose.vVelocity;
 
         return Vector4f{ velocity.v[0], velocity.v[1], velocity.v[2], 0.0f };
-    } else if (get_runtime()->is_openxr()) {
+    } else if (runtime->is_openxr()) {
+        const auto openxr = std::static_pointer_cast<runtimes::OpenXR>(runtime);
         if (index >= 3) {
             return Vector4f{};
         }
@@ -4393,23 +4408,24 @@ Vector4f VR::get_velocity_unsafe(uint32_t index) const {
             return Vector4f{};
         }
 
-        return Vector4f{ *(Vector3f*)&m_openxr->hands[index-1].velocity.linearVelocity, 0.0f };
+        return Vector4f{ *(Vector3f*)&openxr->hands[index-1].velocity.linearVelocity, 0.0f };
     }
 
     return Vector4f{};
 }
 
-Vector4f VR::get_angular_velocity_unsafe(uint32_t index) const {
-    if (get_runtime()->is_openvr()) {
+Vector4f VR::get_angular_velocity_unsafe(uint32_t index, const std::shared_ptr<VRRuntime>& runtime) const {
+    if (runtime->is_openvr()) {
         if (index >= vr::k_unMaxTrackedDeviceCount) {
             return Vector4f{};
         }
 
-        const auto& pose = get_openvr_poses()[index];
+        const auto& pose = std::static_pointer_cast<runtimes::OpenVR>(runtime)->render_poses[index];
         const auto& angular_velocity = pose.vAngularVelocity;
 
         return Vector4f{ angular_velocity.v[0], angular_velocity.v[1], angular_velocity.v[2], 0.0f };
-    } else if (get_runtime()->is_openxr()) {
+    } else if (runtime->is_openxr()) {
+        const auto openxr = std::static_pointer_cast<runtimes::OpenXR>(runtime);
         if (index >= 3) {
             return Vector4f{};
         }
@@ -4419,36 +4435,38 @@ Vector4f VR::get_angular_velocity_unsafe(uint32_t index) const {
             return Vector4f{};
         }
     
-        return Vector4f{ *(Vector3f*)&m_openxr->hands[index-1].velocity.angularVelocity, 0.0f };
+        return Vector4f{ *(Vector3f*)&openxr->hands[index-1].velocity.angularVelocity, 0.0f };
     }
 
     return Vector4f{};
 }
 
 Matrix4x4f VR::get_rotation(uint32_t index) const {
-    if (get_runtime()->is_openvr()) {
+    const auto runtime = get_runtime();
+    if (runtime->is_openvr()) {
         if (index >= vr::k_unMaxTrackedDeviceCount) {
             return glm::identity<Matrix4x4f>();
         }
 
-        std::shared_lock _{ get_runtime()->pose_mtx };
+        std::shared_lock _{ runtime->pose_mtx };
 
-        auto& pose = get_openvr_poses()[index];
+        auto& pose = std::static_pointer_cast<runtimes::OpenVR>(runtime)->render_poses[index];
         auto matrix = Matrix4x4f{ *(Matrix3x4f*)&pose.mDeviceToAbsoluteTracking };
         return glm::extractMatrixRotation(glm::rowMajor4(matrix));
-    } else if (get_runtime()->is_openxr()) {
-        std::shared_lock _{ get_runtime()->pose_mtx };
-        std::shared_lock __{ get_runtime()->eyes_mtx };
+    } else if (runtime->is_openxr()) {
+        const auto openxr = std::static_pointer_cast<runtimes::OpenXR>(runtime);
+        std::shared_lock _{ runtime->pose_mtx };
+        std::shared_lock __{ runtime->eyes_mtx };
 
         // HMD rotation
-        if (index == 0 && !m_openxr->stage_views.empty()) {
-            return Matrix4x4f{*(glm::quat*)&m_openxr->view_space_location.pose.orientation};
-            //return Matrix4x4f{*(glm::quat*)&m_openxr->stage_views[0].pose.orientation};
+        if (index == 0 && !openxr->stage_views.empty()) {
+            return Matrix4x4f{*(glm::quat*)&openxr->view_space_location.pose.orientation};
+            //return Matrix4x4f{*(glm::quat*)&openxr->stage_views[0].pose.orientation};
         } else if (index > 0) {
             if (index == VRRuntime::Hand::LEFT+1) {
-                return Matrix4x4f{*(glm::quat*)&m_openxr->hands[VRRuntime::Hand::LEFT].location.pose.orientation};
+                return Matrix4x4f{*(glm::quat*)&openxr->hands[VRRuntime::Hand::LEFT].location.pose.orientation};
             } else if (index == VRRuntime::Hand::RIGHT+1) {
-                return Matrix4x4f{*(glm::quat*)&m_openxr->hands[VRRuntime::Hand::RIGHT].location.pose.orientation};
+                return Matrix4x4f{*(glm::quat*)&openxr->hands[VRRuntime::Hand::RIGHT].location.pose.orientation};
             }
         }
 
@@ -4459,32 +4477,34 @@ Matrix4x4f VR::get_rotation(uint32_t index) const {
 }
 
 Matrix4x4f VR::get_transform(uint32_t index) const {
-    if (get_runtime()->is_openvr()) {
+    const auto runtime = get_runtime();
+    if (runtime->is_openvr()) {
         if (index >= vr::k_unMaxTrackedDeviceCount) {
             return glm::identity<Matrix4x4f>();
         }
 
-        std::shared_lock _{ get_runtime()->pose_mtx };
+        std::shared_lock _{ runtime->pose_mtx };
 
-        auto& pose = get_openvr_poses()[index];
+        auto& pose = std::static_pointer_cast<runtimes::OpenVR>(runtime)->render_poses[index];
         auto matrix = Matrix4x4f{ *(Matrix3x4f*)&pose.mDeviceToAbsoluteTracking };
         return glm::rowMajor4(matrix);
-    } else if (get_runtime()->is_openxr()) {
-        std::shared_lock _{ get_runtime()->pose_mtx };
+    } else if (runtime->is_openxr()) {
+        const auto openxr = std::static_pointer_cast<runtimes::OpenXR>(runtime);
+        std::shared_lock _{ runtime->pose_mtx };
 
         // HMD rotation
-        if (index == 0 && !m_openxr->stage_views.empty()) {
-            auto mat = Matrix4x4f{*(glm::quat*)&m_openxr->view_space_location.pose.orientation};
-            mat[3] = Vector4f{*(Vector3f*)&m_openxr->view_space_location.pose.position, 1.0f};
+        if (index == 0 && !openxr->stage_views.empty()) {
+            auto mat = Matrix4x4f{*(glm::quat*)&openxr->view_space_location.pose.orientation};
+            mat[3] = Vector4f{*(Vector3f*)&openxr->view_space_location.pose.position, 1.0f};
             return mat;
         } else if (index > 0) {
             if (index == VRRuntime::Hand::LEFT+1) {
-                auto mat = Matrix4x4f{*(glm::quat*)&m_openxr->hands[VRRuntime::Hand::LEFT].location.pose.orientation};
-                mat[3] = Vector4f{*(Vector3f*)&m_openxr->hands[VRRuntime::Hand::LEFT].location.pose.position, 1.0f};
+                auto mat = Matrix4x4f{*(glm::quat*)&openxr->hands[VRRuntime::Hand::LEFT].location.pose.orientation};
+                mat[3] = Vector4f{*(Vector3f*)&openxr->hands[VRRuntime::Hand::LEFT].location.pose.position, 1.0f};
                 return mat;
             } else if (index == VRRuntime::Hand::RIGHT+1) {
-                auto mat = Matrix4x4f{*(glm::quat*)&m_openxr->hands[VRRuntime::Hand::RIGHT].location.pose.orientation};
-                mat[3] = Vector4f{*(Vector3f*)&m_openxr->hands[VRRuntime::Hand::RIGHT].location.pose.position, 1.0f};
+                auto mat = Matrix4x4f{*(glm::quat*)&openxr->hands[VRRuntime::Hand::RIGHT].location.pose.orientation};
+                mat[3] = Vector4f{*(Vector3f*)&openxr->hands[VRRuntime::Hand::RIGHT].location.pose.position, 1.0f};
                 return mat;
             }
         }
@@ -4494,17 +4514,18 @@ Matrix4x4f VR::get_transform(uint32_t index) const {
 }
 
 vr::HmdMatrix34_t VR::get_raw_transform(uint32_t index) const {
-    if (get_runtime()->is_openvr()) {
+    const auto runtime = get_runtime();
+    if (runtime->is_openvr()) {
         if (index >= vr::k_unMaxTrackedDeviceCount) {
             return vr::HmdMatrix34_t{};
         }
 
-        std::shared_lock _{ get_runtime()->pose_mtx };
+        std::shared_lock _{ runtime->pose_mtx };
 
-        auto& pose = get_openvr_poses()[index];
+        auto& pose = std::static_pointer_cast<runtimes::OpenVR>(runtime)->render_poses[index];
         return pose.mDeviceToAbsoluteTracking;
     } else {
-        spdlog::error("VR: get_raw_transform: not implemented for {}", get_runtime()->name());
+        spdlog::error("VR: get_raw_transform: not implemented for {}", runtime->name());
         return vr::HmdMatrix34_t{};
     }
 }
